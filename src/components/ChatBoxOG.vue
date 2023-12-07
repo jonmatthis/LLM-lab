@@ -22,7 +22,7 @@
         <span style="width:4px"></span>
         <button :title="conversation_index<conversation_histories.length-1 ? 'next chat' : 'new chat'"
                 @click="next_chat" class="clear-button" :disabled="nextDisabled">
-          {{ conversation_index < conversation_histories.length - 1 ? "➡️" : "🆕" }}
+          {{ conversation_index < conversation_histories.length-1 ? "➡️" : "🆕"}}
         </button>
 
 
@@ -296,6 +296,16 @@ export default {
     console.log("app mounted");
     // Setup socket
 
+    this.setupSocket();
+    console.log("socket connected");
+
+    // Listen for visibility change and setup socket again if page becomes visible.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        this.setupSocket(); // Try to reconnect
+      }
+    });
+
     this.conversation_histories = JSON.parse(localStorage.getItem('conversation_histories')) || [[]];
     this.conversation_index = JSON.parse(localStorage.getItem('conversation_index')) || 0;
     this.user_id = JSON.parse(localStorage.getItem('user_id')) || '';
@@ -357,39 +367,61 @@ export default {
       let wasEmpty = this.isEmpty;
 
 
-      const woweeEndpoint = 'http://localhost:8125/wowee';
-
       if (this.userMessage.trim() !== '') {
         this.isSending = true;
-        // let current_payload = this.get_payload()
+
+        // Send the message over WebSocket
+        await this.socket.send(JSON.stringify(this.get_payload()));
+
         this.conversation_histories[this.conversation_index].push({
           role: 'human',
           content: this.userMessage.trim(),
           name: this.user_id
         });
+        //localStorage.setItem('conversation_histories', JSON.stringify(this.conversation_histories));
+
         this.userMessage = "";
         this.scrollCheck();
         this.expandTextarea();
 
-        console.log("sending requset to endpoint: " + woweeEndpoint);
-        // Send the message over HTTP Post
-        let response = await fetch(woweeEndpoint, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          // body: JSON.stringify(current_payload)
-        });
-        let jsonData = await response.json();
-        console.log("Response received from endpoint: " + woweeEndpoint + "\n" + jsonData.message);
+        if (wasEmpty) {
+          localStorage.setItem('conversation_histories', JSON.stringify(this.conversation_histories));
+          localStorage.setItem('conversation_index', JSON.stringify(this.conversation_index));
+        }
+      }
+    },
+    setupSocket() {
+      // Connect to the WebSocket server on port 3001
+      //this.socket = new WebSocket('ws://104.229.89.14:3001');
+      if (!this.socket || this.socket.readyState == WebSocket.CLOSED) {
+        this.socket = new WebSocket("wss://" + this.backendURL + '/chat_stateless?token=' + this.api_token)
+      }
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        } else {
-          // convert the response to json
+      if (this.audioContext.isStopped) {
+        this.audioContext.resume();
+      }
+
+      // Listen for incoming messages and handle them
+      this.socket.onmessage = (event) => {
+        const JSONmsg = JSON.parse(event.data);
+        console.log(JSONmsg);
+
+        if (JSONmsg.type == "token") {
+          //console.log("token received");
+          this.currentAIresponse.content += JSONmsg.content;
+          //console.log(this.currentAIresponse.content);
+          if (this.playAudio) {
+            this.playTickSound();
+          }
+          //console.log("tick played")
+          this.scrollCheck();
+          //console.log("scroll checked")
+
+        } else if (JSONmsg.type == "ai_response") {
+
           this.conversation_histories[this.conversation_index].push({
             role: "ai",
-            content: jsonData.message,
+            content: JSONmsg.content,
             name: this.model,
             temp: this.temperature,
             prompt: this.prompts_id
@@ -405,14 +437,11 @@ export default {
           this.isSending = false;
           this.$nextTick(() => {
             this.$refs.textarea.focus();
-            this.scrollCheck();
           });
-          if (wasEmpty) {
-            localStorage.setItem('conversation_histories', JSON.stringify(this.conversation_histories));
-            localStorage.setItem('conversation_index', JSON.stringify(this.conversation_index));
-          }
         }
-      }
+        //console.log("message exited")
+        //console.log(this.socket.bufferedAmount);
+      };
     },
     get_payload() {
       let payload = {
@@ -726,20 +755,15 @@ export default {
 <style scoped>
 
 * {
-  * {
-    --foreground-color: #002396; /* Dark Charcoal */
-    --base-color: #006965; /* Freemocap Dark Green */
-    --popout-color: #a4d6d9; /* Skelly Bone Blue with some transparency */
-    --hot-aqua: #00dce5; /* Freemocap Green */
-    --hot-aqua-faded: #365d5f88; /* Freemocap Green with transparency */
-    --hot-indigo: #cadetblue; /* Cadet Skelly */
-    --hot-fuscia: #d95158; /* Laser Red */
-    --hot-fuscia-faded: #d9515888; /* Laser Red with transparency */
-    --hot-cerise: #ce7076; /* Recording Button Red */
-    --button-color: radial-gradient(var(--base-color), var(--popout-color));
-    --button-focus-color: radial-gradient(var(--popout-color), var(--base-color));
-  }
-
+  --foreground-color: #3a0057;
+  --base-color: #120025;
+  --popout-color: #7631b6b4;
+  --hot-aqua: #57f9ff;
+  --hot-aqua-faded: #57f9ff88;
+  --hot-indigo: #6d2fff;
+  --hot-fuscia: #FF00FF;
+  --hot-fuscia-faded: #FF00FF88;
+  --hot-cerise: #FF00A8;
   /*
   --button-color: linear-gradient(.48turn, var(--popout-color) 0%, var(--foreground-color) 80%, var(--base-color) 100%);
   --button-focus-color: linear-gradient(.98turn, var(--popout-color) 0%, var(--foreground-color) 80%, var(--base-color) 100%);
